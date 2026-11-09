@@ -1,0 +1,30 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+
+test('AEC PCM encoder creates a valid mono 16-bit WAV with the expected samples', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../static/index.html'), 'utf8');
+  const start = html.indexOf('function pcmFramesToWavBlob(');
+  const end = html.indexOf('\nfunction beginPcmUtterance()', start);
+  assert.ok(start >= 0 && end > start, 'PCM WAV encoder should exist in index.html');
+  const snippet = html.slice(start, end);
+  const context = { Blob, DataView, ArrayBuffer, Math };
+  vm.createContext(context);
+  vm.runInContext(snippet, context);
+  const blob = context.pcmFramesToWavBlob([new Float32Array([-1, 0, 1])], 48000);
+  assert.equal(blob.type, 'audio/wav');
+  const bytes = await blob.arrayBuffer();
+  const view = new DataView(bytes);
+  const ascii = (offset, count) => String.fromCharCode(...new Uint8Array(bytes, offset, count));
+  assert.equal(ascii(0, 4), 'RIFF');
+  assert.equal(ascii(8, 4), 'WAVE');
+  assert.equal(view.getUint32(24, true), 48000);
+  assert.equal(view.getUint16(22, true), 1);
+  assert.equal(view.getUint16(34, true), 16);
+  assert.equal(view.getUint32(40, true), 6);
+  assert.equal(view.getInt16(44, true), -32768);
+  assert.equal(view.getInt16(46, true), 0);
+  assert.equal(view.getInt16(48, true), 32767);
+});

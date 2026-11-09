@@ -1,0 +1,1300 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 朋友</title>
+<style>
+  :root { --bg:#fafafa; --fg:#222; --me:#dbeafe; --ai:#fff; --line:#ddd; --panel-bg:rgba(250,250,250,.92); }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1b1b1d; --fg:#eee; --me:#1e3a5f; --ai:#2a2a2e; --line:#3a3a3e; --panel-bg:rgba(27,27,29,.92); } }
+  html, body { margin:0; height:100%; overflow:hidden; background:transparent; }
+  /* The Electron window is transparent: only the character, toolbar and panel show. */
+  [hidden] { display:none !important; } /* author display rules (flex etc.) must not defeat the hidden attribute */
+  body { font-family:system-ui,"Microsoft JhengHei",sans-serif; color:var(--fg); }
+
+  /* One window, three columns, bottom-aligned: character | toolbar column | chat panel. The sizes
+     come from static/shell.js (computeLayout) as CSS variables; the panel column is always
+     reserved so opening/closing the panel never resizes the window. */
+  #app { position:fixed; left:0; bottom:0; width:var(--win-w,748px); height:var(--win-h,640px); display:flex; align-items:flex-end; }
+  #stage { position:relative; flex:none; width:var(--char-w,360px); height:var(--char-h,640px); display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  /* Two stacked clips, absolutely positioned so they overlap for a crossfade instead of sitting
+     side by side (ticket 33). Both transparent, so the window's own transparency shows through. */
+  .clip { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:transparent;
+          display:none; opacity:0; transition:opacity 180ms ease; pointer-events:none; }
+  #face { font-size:calc(var(--char-w,360px) * .5); line-height:1; z-index:1; }
+
+  /* ---- toolbar column: a small gear that opens a vertical strip of controls ---- */
+  #toolbarCol { flex:none; width:48px; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:8px; padding-bottom:10px; opacity:.5; transition:opacity .15s; }
+  #toolbarCol:hover, #toolbarCol.expanded { opacity:1; }
+  #tools { display:flex; flex-direction:column; align-items:center; gap:6px; opacity:0; transform:translateY(8px); pointer-events:none; transition:opacity .15s, transform .15s; }
+  #toolbarCol.expanded #tools { opacity:1; transform:none; pointer-events:auto; }
+  .tbtn { position:relative; width:36px; height:36px; padding:0; border-radius:18px; border:1px solid var(--line); background:var(--panel-bg); color:var(--fg); font-size:16px; line-height:1; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .tbtn.active { background:#2563eb; border-color:#2563eb; color:#fff; }
+  .tbtn:disabled { opacity:.35; cursor:not-allowed; }
+  #zoomGroup { display:flex; flex-direction:column; width:36px; border-radius:18px; overflow:hidden; border:1px solid var(--line); background:var(--panel-bg); }
+  #zoomGroup button { width:36px; height:22px; padding:0; border:0; border-radius:0; background:transparent; color:var(--fg); font-size:15px; line-height:1; cursor:pointer; }
+  #zoomGroup button:disabled { opacity:.35; cursor:not-allowed; }
+  #zoomGroup button + button { border-top:1px solid var(--line); }
+  #exitBtn.armed { background:#dc2626; border-color:#dc2626; color:#fff; }
+  .exitHint { display:none; position:absolute; right:calc(100% + 8px); top:50%; transform:translateY(-50%); white-space:nowrap; padding:4px 10px; border-radius:12px; background:#dc2626; color:#fff; font-size:13px; pointer-events:none; }
+  #exitBtn.armed .exitHint { display:block; }
+  #handle { cursor:grab; }
+  html.shell #stage { cursor:grab; }
+  body.dragging, body.dragging * { cursor:grabbing !important; user-select:none; }
+  #gear { width:28px; height:28px; font-size:14px; }
+  .dot { position:absolute; width:10px; height:10px; border-radius:50%; border:2px solid var(--bg); box-sizing:content-box; }
+  .dot.red { top:-4px; right:-4px; background:#dc2626; }
+  .dot.green { top:-4px; left:-4px; background:#16a34a; }
+
+  /* ---- chat panel: slides in from the right; collapsed it is invisible and takes no mouse ---- */
+  #panel { box-sizing:border-box; flex:none; width:340px; height:var(--panel-h,640px); display:flex; flex-direction:column; background:var(--panel-bg); border:1px solid var(--line); border-radius:16px; box-shadow:0 8px 28px rgba(0,0,0,.25); overflow:hidden;
+           transform:translateX(24px); opacity:0; visibility:hidden; transition:transform .2s ease, opacity .2s ease, visibility 0s linear .2s; }
+  #panel.open { transform:none; opacity:1; visibility:visible; transition-delay:0s; }
+  #panelHead { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid var(--line); font-weight:600; }
+  #panelClose { width:28px; height:28px; padding:0; border-radius:14px; background:transparent; color:var(--fg); border:1px solid var(--line); font-size:14px; }
+  #log { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:85%; padding:8px 12px; border-radius:12px; border:1px solid var(--line); white-space:pre-wrap; }
+  .me { align-self:flex-end; background:var(--me); }
+  .ai { align-self:flex-start; background:var(--ai); }
+  .tag { font-size:12px; opacity:.6; margin-bottom:4px; }
+  .err { border-color:#d33; }
+  .note { align-self:center; font-size:12px; opacity:.6; text-align:center; }
+  #mic.on { background:#dc2626; }
+  #mic { background:#475569; }
+  #continuous.on { background:#16a34a; }
+  #continuous { background:#475569; }
+  button:disabled { opacity:.4; }
+  .retry { margin-top:6px; padding:4px 10px; font-size:13px; }
+  form { display:flex; flex-direction:column; gap:8px; padding:12px 12px 8px; border-top:1px solid var(--line); }
+  #formButtons { display:flex; gap:8px; justify-content:flex-end; }
+  #formButtons button { padding:8px 14px; font-size:15px; }
+  #input { display:block; box-sizing:border-box; width:100%; resize:none; padding:10px; font:inherit; font-size:16px; line-height:1.4; border-radius:8px; border:1px solid var(--line); background:var(--ai); color:var(--fg); overflow-y:hidden; }
+  #voiceRow[hidden] { display:none; }
+  #voiceRow { display:flex; gap:8px; padding:0 12px 12px; }
+  #voiceRow button { flex:1; padding:12px 8px; font-size:15px; }
+  #mic { flex:1.4; }
+  #dropHint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(37,99,235,.18); border:2px dashed #2563eb; border-radius:16px; font-weight:600; pointer-events:none; z-index:5; }
+  #panel { position:relative; }
+  button { padding:10px 16px; font-size:16px; border-radius:8px; border:0; background:#2563eb; color:#fff; }
+  #attachBtn { background:#475569; }
+  #attachPreview { display:flex; align-items:center; gap:8px; padding:0 12px 10px; }
+  #attachThumb { height:56px; border-radius:8px; border:1px solid var(--line); }
+  #attachRemove { padding:4px 10px; font-size:13px; background:#475569; }
+  .msg img.thumb { display:block; max-width:100%; max-height:220px; border-radius:8px; margin-bottom:6px; }
+  .msg.photo img.thumb { max-height:360px; margin-bottom:0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <video id="clipA" class="clip" muted loop playsinline></video>
+    <video id="clipB" class="clip" muted loop playsinline></video>
+    <div id="face">🙂</div>
+  </div>
+  <div id="toolbarCol">
+    <div id="tools">
+      <button class="tbtn" id="exitBtn" title="結束程式" aria-label="結束程式">⏻<span class="exitHint" aria-hidden="true">再按一次結束</span></button>
+      <button class="tbtn" id="handle" title="拖曳:按住移動整個視窗" aria-label="拖曳握把">⠿</button>
+      <button class="tbtn" id="pin" title="置頂" aria-label="置頂">📌</button>
+      <button class="tbtn" id="passthrough" title="穿透:連角色本體也不擋滑鼠" aria-label="穿透">👻</button>
+      <div id="zoomGroup" role="group" aria-label="縮放">
+        <button type="button" id="zoomIn" title="放大" aria-label="放大">＋</button>
+        <button type="button" id="zoomOut" title="縮小" aria-label="縮小">－</button>
+      </div>
+      <button class="tbtn" id="chatBtn" title="對話" aria-label="對話">💬</button>
+    </div>
+    <button class="tbtn" id="gear" title="工具列" aria-label="工具列">⚙<span class="dot red" id="dotUnread" hidden></span><span class="dot green" id="dotListen" hidden></span></button>
+  </div>
+  <aside id="panel" aria-label="對話面板">
+    <div id="panelHead"><span>對話</span><button type="button" id="panelClose" title="收合" aria-label="收合">✕</button></div>
+    <div id="log"></div>
+    <div id="attachPreview" hidden>
+      <img id="attachThumb" alt="待送出的圖片">
+      <button type="button" id="attachRemove" title="移除這張圖片">✕</button>
+    </div>
+    <form id="form">
+      <textarea id="input" rows="1" autocomplete="off" placeholder="說點什麼…" title="Enter 送出,Shift+Enter 換行"></textarea>
+      <input type="file" id="imageFile" accept="image/*" hidden>
+      <div id="formButtons">
+        <button type="button" id="attachBtn" title="附加一張圖片(也可以直接把圖片拖進來)">🖼️<span class="label"> 圖片</span></button>
+        <button title="送出">📤<span class="label"> 送出</span></button>
+      </div>
+    </form>
+    <div id="voiceRow">
+      <button type="button" id="mic" title="按住說話(或按住 F2)">🎤<span class="label"> 按住說話</span></button>
+      <button type="button" id="continuous" title="持續聆聽:開啟後直接說話,不用按鍵">🎙️<span class="label"> 持續聆聽:關</span></button>
+    </div>
+    <div id="dropHint" hidden>放開即可附加圖片</div>
+  </aside>
+</div>
+<script src="/static/player.js"></script>
+<script src="/static/vad.js"></script>
+<script src="/static/probation.js"></script>
+<script src="/static/audio-capture-policy.js"></script>
+<script src="/static/clipswitch.js"></script>
+<script src="/static/shell.js"></script>
+<script>
+const log = document.getElementById("log");
+const form = document.getElementById("form");
+const input = document.getElementById("input");
+const imageFile = document.getElementById("imageFile");
+const attachBtn = document.getElementById("attachBtn");
+const attachPreview = document.getElementById("attachPreview");
+const attachThumb = document.getElementById("attachThumb");
+const attachRemove = document.getElementById("attachRemove");
+
+// ---- Shell: layout, toolbar and chat panel (spec Part 9). Everything window-level (always on
+//      top, click-through, scaling, dragging) needs Electron's window.companionShell; the buttons
+//      stay disabled if it is missing. ----
+const $ = (id) => document.getElementById(id);
+const inShell = !!window.companionShell;
+if (inShell) document.documentElement.classList.add("shell");
+
+let uiScale = 1;
+function applyLayout(scale) {
+  const l = CompanionShell.computeLayout(scale);
+  const root = document.documentElement.style;
+  root.setProperty("--char-w", l.charW + "px");
+  root.setProperty("--char-h", l.charH + "px");
+  root.setProperty("--win-w", l.winW + "px");
+  root.setProperty("--win-h", l.winH + "px");
+  root.setProperty("--panel-h", l.panelH + "px");
+  return l;
+}
+applyLayout(uiScale);
+
+if (!inShell) {
+  for (const id of ["handle", "pin", "passthrough", "zoomIn", "zoomOut"]) {
+    $(id).disabled = true;
+    $(id).title += "(只在桌寵視窗可用)";
+  }
+}
+
+// Window state remembered by Electron (window-state.json): applied before anything else is shown.
+let pinned = true;
+const pinBtn = $("pin");
+function showPinned() { pinBtn.classList.toggle("active", pinned); pinBtn.setAttribute("aria-pressed", String(pinned)); }
+showPinned();
+if (inShell) {
+  window.companionShell.getInitialState().then((st) => {
+    pinned = !!st.alwaysOnTop;
+    showPinned();
+    uiScale = CompanionShell.clampScale(st.scale);
+    applyLayout(uiScale);
+    updateZoomButtons();
+  }).catch(() => {});
+  pinBtn.addEventListener("click", () => {
+    pinned = !pinned;
+    showPinned();
+    window.companionShell.setAlwaysOnTop(pinned);
+  });
+}
+
+// ---- Scaling: +/- step the character (and the window around it) by 10%. The page only asks;
+//      Electron's main process re-checks against the real screen, resizes the window with its
+//      bottom-left corner fixed, and answers with the scale it actually applied. ----
+function updateZoomButtons() {
+  if (!inShell) return;
+  const screenH = window.screen.availHeight; // work-area height of the screen this window is on
+  $("zoomOut").disabled = CompanionShell.stepScale(uiScale, -1, screenH) === uiScale;
+  $("zoomIn").disabled = CompanionShell.stepScale(uiScale, +1, screenH) === uiScale;
+}
+let zooming = false;
+async function stepZoom(direction) {
+  if (!inShell || zooming) return;
+  const wanted = CompanionShell.stepScale(uiScale, direction, window.screen.availHeight);
+  if (wanted === uiScale) return;
+  zooming = true;
+  try {
+    uiScale = CompanionShell.clampScale(await window.companionShell.setScale(wanted));
+    applyLayout(uiScale);
+  } finally {
+    zooming = false;
+    updateZoomButtons();
+  }
+}
+$("zoomIn").addEventListener("click", () => stepZoom(+1));
+$("zoomOut").addEventListener("click", () => stepZoom(-1));
+
+// ---- Window dragging: the handle and the character body share one gesture. Nothing happens
+//      until the pointer has really moved (so a plain click on the character stays a click); then
+//      Electron's main process follows the cursor and moves the window. No CSS app-region is used:
+//      it would stop the character from receiving clicks at all. ----
+const DRAG_THRESHOLD_PX = 4;
+let dragging = false;
+function wireDrag(el) {
+  let press = null; // { id, x, y } while the button is down and the drag hasn't started yet
+  el.addEventListener("pointerdown", (e) => {
+    if (!inShell || e.button !== 0) return;
+    press = { id: e.pointerId, x: e.screenX, y: e.screenY };
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (!press || dragging || e.pointerId !== press.id) return;
+    if (Math.hypot(e.screenX - press.x, e.screenY - press.y) < DRAG_THRESHOLD_PX) return;
+    dragging = true;
+    document.body.classList.add("dragging");
+    el.setPointerCapture(e.pointerId);
+    window.companionShell.startDrag();
+  });
+  const end = () => {
+    press = null;
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("dragging");
+    window.companionShell.stopDrag();
+  };
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(type, end);
+  window.addEventListener("blur", end); // never leave the window glued to the cursor
+}
+wireDrag($("handle"));
+wireDrag($("stage"));
+
+const toolbarCol = $("toolbarCol"), panelEl = $("panel"), chatBtn = $("chatBtn");
+let panelOpen = false, collapseTimer = null;
+
+function expandToolbar() { clearTimeout(collapseTimer); toolbarCol.classList.add("expanded"); }
+function scheduleCollapse() {
+  clearTimeout(collapseTimer);
+  if (panelOpen) return; // the toolbar stays out while the panel is open
+  collapseTimer = setTimeout(() => { toolbarCol.classList.remove("expanded"); exitStep("fold"); }, 2000);
+}
+
+// The exit button asks twice (CompanionShell.nextExitState decides; this only shows it and times it).
+let exitState = CompanionShell.initialExit(), exitTimer = null;
+function exitStep(type) {
+  const out = CompanionShell.nextExitState(exitState, { type, now: Date.now() });
+  exitState = out.state;
+  clearTimeout(exitTimer);
+  const armed = exitState.phase === "armed";
+  $("exitBtn").classList.toggle("armed", armed);
+  $("exitBtn").setAttribute("aria-label", armed ? "再按一次結束程式" : "結束程式");
+  if (out.effect === "quit" && inShell) window.companionShell.quit();
+  if (armed) exitTimer = setTimeout(() => exitStep("tick"), CompanionShell.EXIT_ARM_MS + 25);
+}
+$("exitBtn").addEventListener("click", () => exitStep("press"));
+$("gear").addEventListener("mouseenter", expandToolbar);
+$("gear").addEventListener("click", expandToolbar);
+toolbarCol.addEventListener("mouseenter", () => clearTimeout(collapseTimer));
+toolbarCol.addEventListener("mouseleave", scheduleCollapse);
+
+// Red dot on the gear: something arrived in the chat while the panel was collapsed. The rule
+// itself lives in shell.js (nextUnread); this only wires it to the page.
+let unread = CompanionShell.initialUnread();
+let loadingHistory = false; // the saved conversation loaded at start-up was never "new"
+function noteUnread(event) {
+  unread = CompanionShell.nextUnread(unread, event);
+  $("dotUnread").hidden = unread.count === 0;
+}
+
+function setPanelOpen(open) {
+  if (open === panelOpen) return;
+  panelOpen = open;
+  noteUnread({ type: open ? "panel_opened" : "panel_closed" });
+  panelEl.classList.toggle("open", open);
+  chatBtn.classList.toggle("active", open);
+  if (open) {
+    expandToolbar(); input.focus(); log.scrollTop = log.scrollHeight;
+    if (inShell) window.companionShell.ensurePanelVisible();
+  }
+  else scheduleCollapse();
+}
+chatBtn.addEventListener("click", () => setPanelOpen(!panelOpen));
+$("panelClose").addEventListener("click", () => setPanelOpen(false));
+
+// ---- Image attachment: a plain file picker, read locally, sent as base64 in the /chat body.
+//      No screen capture or camera access anywhere — this is the only path an image can enter by.
+const MAX_IMAGE_MB = 15;
+let pendingImage = null; // { data: base64 (no "data:" prefix), mime: "image/png" }
+
+function clearPendingImage() {
+  pendingImage = null;
+  attachPreview.hidden = true;
+  attachThumb.src = "";
+}
+
+function attachImageFile(file) {
+  if (!file.type.startsWith("image/")) { addNote("這個檔案不是圖片。"); return; }
+  if (file.size > MAX_IMAGE_MB * 1024 * 1024) { addNote(`圖片太大了,請小於 ${MAX_IMAGE_MB}MB。`); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    pendingImage = { data: dataUrl.slice(dataUrl.indexOf(",") + 1), mime: file.type };
+    attachThumb.src = dataUrl;
+    attachPreview.hidden = false;
+  };
+  reader.onerror = () => addNote("圖片讀取失敗,請再試一次。");
+  reader.readAsDataURL(file);
+}
+
+attachBtn.addEventListener("click", () => imageFile.click());
+attachRemove.addEventListener("click", clearPendingImage);
+imageFile.addEventListener("change", () => {
+  const file = imageFile.files[0];
+  imageFile.value = "";
+  if (file) attachImageFile(file);
+});
+
+// Drag-and-drop: the whole chat panel is the drop target. Outside the panel a dropped file must
+// do nothing at all — left alone, Electron/Chromium would navigate the window to the file.
+const dropHint = $("dropHint");
+const hasFiles = (e) => !!e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
+for (const type of ["dragover", "drop"]) document.addEventListener(type, (e) => { if (hasFiles(e)) e.preventDefault(); });
+let dragDepth = 0;
+function endDragHint() { dragDepth = 0; dropHint.hidden = true; }
+$("panel").addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; dropHint.hidden = false; });
+$("panel").addEventListener("dragleave", (e) => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dropHint.hidden = true; });
+$("panel").addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  endDragHint();
+  const files = [...e.dataTransfer.files];
+  if (!files.length) return;
+  if (files.length > 1) addNote("一次只能附加一張圖片,已使用第一個檔案。");
+  attachImageFile(files[0]);
+});
+
+// Multi-line input: Enter sends, Shift+Enter breaks the line, and Enter while an input method
+// is still composing (e.g. picking a Chinese character) must not send. Grows to 5 lines, then scrolls.
+const INPUT_MAX_LINES = 5;
+function growInput() {
+  input.style.height = "auto";
+  const lineH = parseFloat(getComputedStyle(input).lineHeight) || 22;
+  const chrome = input.offsetHeight - input.clientHeight; // borders
+  const padding = parseFloat(getComputedStyle(input).paddingTop) + parseFloat(getComputedStyle(input).paddingBottom);
+  const maxH = lineH * INPUT_MAX_LINES + padding + chrome;
+  input.style.height = Math.min(input.scrollHeight + chrome, maxH) + "px";
+  input.style.overflowY = input.scrollHeight + chrome > maxH ? "auto" : "hidden";
+}
+input.addEventListener("input", growInput);
+input.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  form.requestSubmit();
+});
+
+// VAD thresholds live in the environment (server-side), so the browser fetches them once;
+// these defaults match the documented ones and only matter if that fetch fails.
+let vadConfig = { vadSilenceMs: 700, vadMinMs: 500 };
+let listeningOff = false;       // stt.enabled false (or no Groq key): no microphone controls at all
+fetch("/config").then(r => r.json()).then(cfg => {
+  vadConfig = cfg;
+  if (cfg.stt && cfg.stt.enabled === false) {
+    listeningOff = true;
+    document.getElementById("voiceRow").hidden = true;   // hold-to-talk and continuous listening both live here
+    return;                                              // nothing below (auto-listen) applies
+  }
+  if (cfg.ui && typeof cfg.ui.hitWidthRatio === "number") hitRatio = cfg.ui.hitWidthRatio;
+  // ui.auto_listen: tried once, right here. A refusal is explained in the chat log and never retried.
+  if (cfg.ui && cfg.ui.autoListen) startContinuous({ auto: true });
+}).catch(() => {});
+
+// ---- Character: state machine (player.js) + clip/emoji rendering ----
+// Two stacked <video> elements so a clip change can cross-fade instead of hard-cutting (ticket
+// 33): `front`/`back` track which one is currently showing vs. standing by to receive the next
+// clip, swapping roles on every real switch. A ClipSwitchDebouncer (static/clipswitch.js) sits
+// in front of all of it: a flurry of emotion changes within one fast reply settles down to
+// whichever state is still current once minDwellMs has actually passed, rather than flashing
+// through every clip in between — see tests_js/clipswitch.test.js for the exact rule.
+let front = document.getElementById("clipA");
+let back = document.getElementById("clipB");
+const faceEl = document.getElementById("face");
+const FACES = { idle:"🙂", listening:"👂", thinking:"🤔", "talking:neutral":"😐", "talking:happy":"😄",
+                "talking:angry":"😠", "talking:sad":"😢", "talking:surprised":"😲" };
+let avatar = { emotions: undefined, clips: {} };
+let clipSwitcher = new ClipSwitchDebouncer({ minDwellMs: 220 });
+let outfitSwap = new OutfitSwap(null);   // which outfit she wears and when a new one goes on (static/clipswitch.js)
+
+function resolveClip(state) {
+  return { url: clipFor(avatar.clips, state), fallback: "idle" };   // only ever from the outfit she wears
+}
+
+// ---- Changing clothes (the server's "outfit" event) ----
+// The new outfit's clips are loaded first; she changes at the cut between two of her actions (or at
+// once if she is standing idle), with a hard cut — never a half-loaded outfit, never old clothes after.
+function preloadClip(url) {
+  return new Promise((resolve, reject) => {
+    const probe = document.createElement("video");
+    probe.preload = "auto";
+    probe.muted = true;
+    probe.onloadeddata = () => resolve();
+    probe.onerror = () => reject(new Error(url));
+    probe.src = url;
+  });
+}
+function handleOutfitDecision(decision, state) {
+  if (!decision) return;
+  if (decision.type === "failed") { addNote(decision.message); return; }
+  avatar.clips = decision.clips;
+  avatar.outfit = decision.name;
+  clipSwitcher = new ClipSwitchDebouncer({ minDwellMs: 220 });   // the new clothes show at once, not after the old clip's dwell time
+  render(state || player.state);
+}
+function onOutfit(ev) {
+  const urls = outfitSwap.begin(ev.name, ev.clips, player.state);
+  if (!urls) return;
+  Promise.all(urls.map(preloadClip)).then(
+    () => handleOutfitDecision(outfitSwap.loaded(ev.name, player.state)),
+    () => handleOutfitDecision(outfitSwap.failed(ev.name)));
+}
+
+function render(state) {
+  const { url, fallback } = resolveClip(state);
+  // What actually gets debounced is "what should be on screen", not the raw player state: two
+  // different states that fall back to the same clip (or both have no clip at all) must not be
+  // treated as a change, or the dwell timer would reset for a switch nobody can actually see.
+  if (!clipSwitcher.request(url || `emoji:${state}`, performance.now())) return;
+
+  if (url) {
+    faceEl.style.display = "none";
+    front.style.display = "block";
+    back.style.display = "block";
+    if (!back.src.endsWith(url)) back.src = url;
+    back.currentTime = 0;
+    back.play().catch(() => {});
+    back.style.opacity = "1";
+    front.style.opacity = "0";
+    [front, back] = [back, front]; // the one just faded in becomes "front" for next time
+  } else {
+    front.style.display = "none";
+    back.style.display = "none";
+    faceEl.style.display = "block";
+    faceEl.textContent = FACES[state] || FACES[fallback] || "🙂";
+  }
+}
+
+// While a possible interruption is being checked (sound heard while she talks, STT verdict pending) she is
+// turned down, not stopped (strategy doc sections 10 and 51). How far is the `ui.duck_level` setting
+// (default 0.4, about -8 dB; 1 = not turned down); anything unusable falls back to the default.
+const duckTarget = () => {
+  const v = vadConfig.ui && vadConfig.ui.duckLevel;
+  return typeof v === "number" && v >= 0.1 && v <= 1 ? v : 0.4;
+};
+let duckLevel = 1;
+function applyDuck() {
+  if (current) current.volume = duckLevel;
+  if (fillerEl) fillerEl.volume = duckLevel;
+}
+function duckAudio() { duckLevel = duckTarget(); applyDuck(); }
+function restoreAudio() { duckLevel = 1; applyDuck(); }
+
+let fillers = [], fillerEl = null;
+function playFiller() {
+  if (!fillers.length) return;
+  fillerEl = new Audio(fillers[Math.floor(Math.random() * fillers.length)]);
+  fillerEl.volume = duckLevel;
+  fillerEl.play().catch(() => {});
+}
+function onPlayerChange(state) {
+  handleOutfitDecision(outfitSwap.stateChanged(state), state);   // a waiting outfit goes on between two actions
+  render(state);
+  syncMicGate(state);
+}
+let player = new CharacterPlayer({ onChange: onPlayerChange, onFiller: playFiller });
+setInterval(() => player.handle({ type: "tick", at: performance.now() }), 250);
+fetch("/avatar").then(r => r.json()).then(cfg => {
+  avatar = cfg;
+  outfitSwap = new OutfitSwap(cfg.outfit || null);
+  fillers = cfg.fillers || [];
+  player = new CharacterPlayer({ emotions: cfg.emotions, onChange: onPlayerChange, onFiller: playFiller });
+  render(player.state);
+}).catch(() => render(player.state));
+
+// "happy → sad": the emotions of a reply in order, without repeating neighbours.
+function emotionPath(list) {
+  const path = (list || []).filter((e, i, all) => i === 0 || e !== all[i - 1]);
+  return path.length ? path.join(" → ") : "neutral";
+}
+
+// Show the saved conversation when the page opens.
+fetch("/history").then(r => r.json()).then(items => {
+  loadingHistory = true;
+  for (const m of items) {
+    if (m.role === "user") { add("me", m.has_image ? "🖼️ " + m.text : m.text); continue; }
+    const bubble = add("ai", "");
+    const tag = document.createElement("div");
+    tag.className = "tag";
+    tag.textContent = "情緒:" + emotionPath(m.emotions);
+    const body = document.createElement("span");
+    body.textContent = m.text;
+    bubble.append(tag, body);
+    if (m.photo) {  // the photo she took in that turn: shown again from the local folder, or a note when the file is gone
+      if (m.photo.exists) addPhoto(m.photo.url); else addNote("📷 (這張照片已經不在了)");
+    }
+  }
+  loadingHistory = false;
+}).catch(() => { loadingHistory = false; });
+
+// Sequential audio playback queue (audio events arrive in order).
+let queue = [], current = null, currentItemUrl = null, playToken = 0;
+let waitingFiller = false;
+function stopAudio() {
+  duckLevel = 1;   // a stopped turn must not leave the next one ducked
+  playToken++;
+  for (const item of queue) URL.revokeObjectURL(item.url);
+  queue = []; waitingFiller = false;
+  if (current) {
+    const old = current;
+    current = null;
+    old.pause();
+    try { old.removeAttribute("src"); old.load(); } catch (_) {}
+  }
+  if (currentItemUrl) { URL.revokeObjectURL(currentItemUrl); currentItemUrl = null; }
+  if (fillerEl) fillerEl.pause();
+}
+function enqueue(ev, onStart) {
+  const bytes = Uint8Array.from(atob(ev.data), c => c.charCodeAt(0));
+  queue.push({ url: URL.createObjectURL(new Blob([bytes], { type: ev.mime })), index: ev.index, onStart });
+  if (!current) playNext(playToken);
+}
+function playNext(token) {
+  if (token !== playToken) return;
+  if (fillerEl && !fillerEl.paused && !fillerEl.ended) { // let the "嗯…" finish first
+    if (!waitingFiller) {
+      waitingFiller = true;
+      fillerEl.addEventListener("ended", () => { waitingFiller = false; playNext(token); }, { once: true });
+    }
+    return;
+  }
+  const item = queue.shift();
+  if (!item) { current = null; return; }
+  const a = new Audio(item.url);
+  a.volume = duckLevel;
+  current = a;
+  currentItemUrl = item.url;
+  let released = false;
+  const releaseUrl = () => {
+    if (released) return;
+    released = true;
+    URL.revokeObjectURL(item.url);
+    if (currentItemUrl === item.url) currentItemUrl = null;
+  };
+  const finish = () => {
+    releaseUrl();
+    if (token === playToken) {
+      player.handle({ type: "audio_ended" });
+      if (current === a) current = null;
+      playNext(token);
+    }
+  };
+  a.addEventListener("playing", () => { player.handle({ type: "audio_started", index: item.index }); item.onStart && item.onStart(); }, { once: true });
+  a.addEventListener("ended", finish, { once: true });
+  a.addEventListener("error", finish, { once: true });
+  // A freshly-created Blob URL for an MP3 with no reliable duration header can make some
+  // browsers seek forward a little while they work out the duration, clipping the start of
+  // speech. Waiting for metadata and forcing currentTime back to 0 guards against that.
+  const startPlayback = () => { a.currentTime = 0; a.play().catch(finish); };
+  if (a.readyState >= 1 /* HAVE_METADATA */) startPlayback();
+  else a.addEventListener("loadedmetadata", startPlayback, { once: true });
+}
+
+function add(cls, text, image = null) {
+  if (cls === "ai") noteUnread({ type: "message", history: loadingHistory });
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  if (image) {
+    const img = document.createElement("img");
+    img.className = "thumb";
+    img.src = `data:${image.mime};base64,${image.data}`;
+    div.appendChild(img);
+  }
+  div.appendChild(document.createTextNode(text));
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+// A photo she took: a bubble with the picture. Only a path on this machine (/photos/<file>) is ever used as the
+// source — anything else (a remote address, a path that climbs out) is refused and nothing is drawn.
+const LOCAL_PHOTO = /^\/photos\/[0-9A-Za-z][0-9A-Za-z._-]*$/;
+function addPhoto(url) {
+  if (typeof url !== "string" || !LOCAL_PHOTO.test(url)) return null;
+  const div = add("ai photo", "");
+  const img = document.createElement("img");
+  img.className = "thumb";
+  img.alt = "角色拍的照片";
+  img.addEventListener("load", () => { log.scrollTop = log.scrollHeight; });
+  img.addEventListener("error", () => { img.replaceWith(document.createTextNode("(這張照片已經不在了)")); });  // e.g. the file was deleted
+  img.src = url;
+  div.appendChild(img);
+  return div;
+}
+
+function addNote(text) {
+  noteUnread({ type: "message", history: loadingHistory });
+  const div = document.createElement("div");
+  div.className = "note";
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+let currentAbort = null;
+const gate = new ProbationGate();
+// The gate decides; the page carries out what it says (volume, notes, switching listening off).
+// "send" / "begin_turn" / "discard" are handled by the code that asked, because they need its context.
+function performActions(actions) {
+  for (const action of actions) {
+    if (action.type === "duck") duckAudio();
+    else if (action.type === "restore") restoreAudio();
+    else if (action.type === "stop_continuous") stopContinuous();
+    else if (action.type === "note") addNote(action.text);
+  }
+}
+
+function abortCurrentSend() {
+  if (currentAbort) { currentAbort.abort(); currentAbort = null; }
+}
+
+async function send(payload, { isRetry = false, isAudio = false, wasInterrupt = false, probation = null, voiceMode = null, voiceDurationMs = null, meBubble = null, image = null, meta = null } = {}) {
+  // Each send has its own controller. An ordinary send begins its turn at once; a send "on probation"
+  // (a candidate interruption) leaves everything alone (her voice, the screen, the running turn) until
+  // the verdict arrives; only real words begin the turn, and only then is she cut off.
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let confirmed = !probation;
+  let bubble = null, emoEl = null, timeEl = null, body = null;
+  const emotions = [];
+  let first = true, firstAudio = true;
+  let t0 = performance.now();
+  let heard = null; // the transcript, once we have it (audio turns only)
+  let aborted = false; // cut off by a newer turn; not a signal about audio quality either way
+
+  const beginTurn = () => {
+    gate.handle({ type: "turn_started" });
+    abortCurrentSend();
+    currentAbort = controller;
+    stopAudio();
+    player.handle({ type: "sent", at: performance.now() });
+    // Text: we already know what to show, so the bubble goes up right away. Audio: we don't know
+    // what was said until the "transcript" event comes back, but the placeholder still goes up
+    // now (rather than waiting for that event) so the user's bubble always appears before the
+    // character's reply, not after it. On a retry, the placeholder/bubble from the first attempt
+    // is reused instead of adding a second one.
+    if (!isRetry && !isAudio) add("me", payload, image);
+    if (isAudio && !meBubble) meBubble = add("me", "🎙️ …");
+    bubble = add("ai", "");
+    const tag = document.createElement("div");
+    tag.className = "tag";
+    emoEl = document.createElement("span");
+    timeEl = document.createElement("span");
+    tag.append(emoEl, timeEl);
+    body = document.createElement("span");
+    bubble.append(tag, body);
+    emoEl.textContent = "思考中…";
+    t0 = performance.now();
+    confirmed = true;
+  };
+  if (!probation) beginTurn();
+
+  const fail = (text) => {
+    bubble.classList.add("err");
+    emoEl.textContent = "沒有成功";
+    timeEl.textContent = "";
+    body.textContent = text;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "retry";
+    btn.textContent = "重試";
+    btn.onclick = () => { bubble.remove(); send(payload, { isRetry: true, isAudio, wasInterrupt, voiceMode, voiceDurationMs, meBubble, image, meta }); };
+    bubble.append(btn);
+  };
+
+  const handleEvent = (ev) => {
+    player.handle(ev);
+    if (ev.type === "transcript") {
+      heard = ev.text;
+      if (meBubble) meBubble.textContent = ev.text;
+    } else if (ev.type === "sentence") {
+      emotions.push(ev.emotion);
+      emoEl.textContent = "情緒:" + emotionPath(emotions);
+      if (first) { timeEl.textContent += "  ·  首句 " + ((performance.now() - t0) / 1000).toFixed(2) + " 秒"; first = false; }
+      body.textContent += ev.text;
+    } else if (ev.type === "audio") {
+      enqueue(ev, () => {
+        if (firstAudio) { firstAudio = false; timeEl.textContent += "  ·  首音 " + ((performance.now() - t0) / 1000).toFixed(2) + " 秒"; }
+      });
+    } else if (ev.type === "notice") {
+      addNote(ev.message);
+    } else if (ev.type === "outfit") {
+      onOutfit(ev);
+    } else if (ev.type === "error") {
+      stopAudio();
+      fail(ev.message);
+    }
+  };
+
+  const heldEvents = [];   // events that arrive before the verdict (none expected; kept so nothing is lost)
+  try {
+    const audioHeaders = { "Content-Type": payload.type || "audio/webm" };
+    if (voiceMode) audioHeaders["X-Voice-Mode"] = voiceMode;
+    if (wasInterrupt) audioHeaders["X-Voice-Interrupt"] = "1";
+    if (Number.isFinite(voiceDurationMs)) audioHeaders["X-Voice-Duration-Ms"] = String(Math.max(0, Math.round(voiceDurationMs)));
+    if (meta) audioHeaders["X-Clip-Meta"] = meta;   // what the page measured about this clip (server logs it when stt.debug_log is on)
+    const res = isAudio
+      ? await fetch("/chat/audio", { method: "POST", headers: audioHeaders, body: payload, signal })
+      : await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ message: payload, image_data: image?.data, image_mime: image?.mime }), signal });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, i).replace(/^data: /, "");
+        buf = buf.slice(i + 2);
+        const ev = JSON.parse(line);
+        if (!confirmed) {
+          // On probation the FIRST decisive event is the verdict: a transcript (real words) or an error
+          // (nothing heard / STT unavailable / filtered out as not speech).
+          if (ev.type !== "transcript" && ev.type !== "error") { heldEvents.push(ev); continue; }
+          const actions = gate.handle({ type: "stt_result", token: probation.token, kind: ev.type === "transcript" ? "transcript" : "rejected" });
+          if (!actions.some((a) => a.type === "begin_turn")) {   // rejected, or stale (another turn began meanwhile)
+            performActions(actions);
+            controller.abort();
+            return;
+          }
+          beginTurn();
+          for (const held of heldEvents) handleEvent(held);
+          heldEvents.length = 0;
+        }
+        handleEvent(ev);
+        log.scrollTop = log.scrollHeight;
+      }
+    }
+    if (!confirmed) performActions(gate.handle({ type: "stt_result", token: probation.token, kind: "ended_undecided" }));
+  } catch (err) {
+    if (err.name === "AbortError") { if (confirmed) timeEl.textContent += "  ·  已中斷"; aborted = true; return; }
+    if (!confirmed) { performActions(gate.handle({ type: "stt_result", token: probation.token, kind: "network_error" })); return; }
+    player.handle({ type: "error" });
+    fail("連不上伺服器,確認程式還在執行後再試一次。");
+  } finally {
+    // A turn that got cut off by a newer one (AbortError) was never actually heard one way or
+    // the other — it just lost the race. Counting it as "unclear" meant every successful
+    // barge-in also nudged the mishear counters, so three quick interruptions in a row (normal
+    // usage) could trip the "sounds like it can't hear you" safety net on its own.
+    // A candidate that was never confirmed is judged by the gate (as a rejection), not here.
+    if (isAudio && confirmed && !aborted) {
+      performActions(gate.handle({
+        type: "audio_outcome",
+        wasInterrupt,
+        unclear: heard === null,
+      }));
+    }
+  }
+}
+
+// ---- Proactive speaking: the character may open its own stream of events at any time, with
+//      no message from the user first. Off unless COMPANION_PROACTIVE=1 is set server-side; this
+//      stream is harmless to keep open either way — nothing ever arrives on it if it's off. ----
+function listenForProactive() {
+  const source = new EventSource("/chat/proactive");
+  let bubble = null, emoEl = null, body = null;
+  const emotions = [];
+  source.onmessage = (msg) => {
+    const ev = JSON.parse(msg.data);
+    player.handle(ev);
+    if (ev.type === "sentence") {
+      if (!bubble) {
+        bubble = add("ai", "");
+        const tag = document.createElement("div");
+        tag.className = "tag";
+        emoEl = document.createElement("span");
+        tag.append(emoEl);
+        body = document.createElement("span");
+        bubble.append(tag, body);
+        emotions.length = 0;
+      }
+      emotions.push(ev.emotion);
+      emoEl.textContent = "情緒:" + emotionPath(emotions);
+      body.textContent += ev.text;
+    } else if (ev.type === "audio") {
+      enqueue(ev, () => {});
+    } else if (ev.type === "notice") {
+      addNote(ev.message);
+    } else if (ev.type === "outfit") {
+      onOutfit(ev);
+    } else if (ev.type === "photo") {
+      addPhoto(ev.url);   // a picture she took finishes whenever it finishes: it arrives on this stream, not on the turn's
+    } else if (ev.type === "done") {
+      bubble = null; // the next proactive message, if any, starts a fresh bubble of its own
+    }
+    log.scrollTop = log.scrollHeight;
+  };
+  // EventSource reconnects on its own after a drop; nothing to do here.
+}
+listenForProactive();
+
+// ---- Click-through (spec Part 9). The window starts fully click-through; the mouse only "lands"
+//      while it is over something interactive — the middle of the character, a visible toolbar
+//      button, or the open panel — and everywhere else clicks fall through to the desktop. The
+//      decision itself is one pure function (CompanionShell.hitTest, unit-tested); this block only
+//      gathers the rectangles and tells Electron when the answer changes. Region-based, not
+//      per-pixel (agreed — see the spec). The 👻 button additionally makes the character itself
+//      click-through, leaving only the toolbar and the open panel; it always starts off. ----
+let hitRatio = 0.6;            // ui.hit_width_ratio, filled in from /config
+let passthroughMode = false;   // the 👻 toggle: "even the character lets clicks through"
+let ignoring = true;           // Electron starts the window click-through
+let lastPoint = null;          // last pointer position inside the window, in window coordinates
+
+const rectOf = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+function hitRegions() {
+  const toolbar = [rectOf($("gear"))];
+  if (toolbarCol.classList.contains("expanded")) {
+    for (const id of ["exitBtn", "handle", "pin", "passthrough", "zoomGroup", "chatBtn"]) toolbar.push(rectOf($(id)));
+  }
+  // getBoundingClientRect follows the panel's slide animation, so the hit area is where it really is
+  return { character: rectOf($("stage")), toolbar, panel: rectOf(panelEl) };
+}
+function decideMouse(point) {
+  if (!inShell || dragging) return; // a drag keeps the window receiving the mouse; Electron restores afterwards
+  const interactive = CompanionShell.hitTest(point, hitRegions(), { passthrough: passthroughMode, panelOpen, ratio: hitRatio });
+  if (!interactive === ignoring) return; // unchanged: don't tell the main process the same thing again
+  ignoring = !interactive;
+  window.companionShell.setIgnoreMouseEvents(ignoring);
+}
+const reevaluateMouse = () => { if (lastPoint) decideMouse(lastPoint); };
+
+if (inShell) {
+  document.addEventListener("mousemove", (e) => { lastPoint = { x: e.clientX, y: e.clientY }; decideMouse(lastPoint); });
+  document.documentElement.addEventListener("mouseleave", () => {
+    lastPoint = null;
+    if (!dragging && !ignoring) { ignoring = true; window.companionShell.setIgnoreMouseEvents(true); }
+  });
+  // things that move or appear under a stationary pointer: re-ask without waiting for a mouse move
+  for (const el of [panelEl, $("tools"), toolbarCol]) el.addEventListener("transitionend", reevaluateMouse);
+  window.addEventListener("pointerup", () => setTimeout(reevaluateMouse, 0)); // right after a drag ends
+
+  function setPassthroughMode(on) {
+    passthroughMode = on;
+    $("passthrough").classList.toggle("active", on);
+    window.companionShell.passthroughChanged(on); // lets the tray menu offer "turn click-through off"
+    reevaluateMouse();
+  }
+  $("passthrough").addEventListener("click", () => setPassthroughMode(!passthroughMode));
+
+  // Commands from the tray menu (the way out if the toolbar is ever unreachable).
+  window.companionShell.onTrayCommand((command) => {
+    if (command === "passthrough-off") setPassthroughMode(false);
+    if (command === "hidden") {
+      // A hidden character must not leave the microphone open.
+      if (contBtn.classList.contains("on")) {
+        stopContinuous();
+        addNote("角色已隱藏,持續聆聽已關閉。要的話再手動開啟。");
+      }
+    }
+  });
+}
+
+// ---- Voice input: recorded audio sent straight to Gemini, never browser speech recognition.
+//      Two ways in: hold to talk (button or F2), or continuous listening (auto turn-taking). ----
+const micBtn = document.getElementById("mic");
+const contBtn = document.getElementById("continuous");
+const canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+
+if (!canRecord) {
+  micBtn.disabled = true;
+  micBtn.textContent = "🎤 無法錄音";
+  micBtn.title = "這個視窗無法使用麥克風錄音";
+  contBtn.disabled = true;
+  contBtn.title = "這個視窗無法使用麥克風錄音";
+}
+
+// ---- Shared guards (Part 5 §持續對話): repeated bad turns during continuous listening
+//      trigger two independent, low-key safety nets. Neither one blocks hold-to-talk. ----
+// Production capture uses the browser's native WebRTC echo canceller. Unlike a JavaScript
+// AEC implementation, the browser can align capture against its actual output-device render
+// clock. On Chromium this is generally the WebRTC AEC3 path, but implementation details vary by
+// browser/version/device. Do not run a second AEC on top of the native one.
+let aecAudioCtx = null, aecWorkletModuleLoaded = false;
+let aecMicSource = null, aecMicProcessor = null, aecProcessedStream = null;
+let nativeAecSettings = null, nativeAecMode = "unknown";
+// Keep a short ring of cleaned PCM so VAD latency never clips the first syllable.
+const PCM_PREROLL_MS = 400;
+let PCM_SAMPLE_RATE = 48000;
+const pcmPrerollFrames = [];
+let pcmPrerollSamples = 0, pcmCaptureActive = false, pcmCaptureFrames = [];
+
+async function ensureAudioCapturePipeline() {
+  // Kept as a compatibility name for the existing start-up flow. Native browser AEC is preferred
+  // over a hand-wired render tap because it owns device timing and echo-reference alignment.
+  if (!aecAudioCtx || aecAudioCtx.state === "closed") {
+    aecAudioCtx = null;
+    aecWorkletModuleLoaded = false;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    try { aecAudioCtx = new AudioContextClass({ sampleRate: 48000, latencyHint: "interactive" }); }
+    catch (_) { aecAudioCtx = new AudioContextClass({ latencyHint: "interactive" }); }
+  }
+  // Use the actual context rate; the browser resamples the native-processed mic stream to it.
+  // This avoids rejecting devices whose audio clock runs at 44.1 kHz or another supported rate.
+  PCM_SAMPLE_RATE = aecAudioCtx.sampleRate;
+  if (aecAudioCtx.state === "suspended") await aecAudioCtx.resume();
+}
+
+async function getAecMicStream() {
+  // Continuous mode requires native AEC; never silently run an unprocessed mic while the speaker plays.
+  const result = await AudioCapturePolicy.acquire(navigator.mediaDevices, PCM_SAMPLE_RATE);
+  nativeAecSettings = result.settings;
+  nativeAecMode = result.status.mode;
+  return result.stream;
+}
+
+async function getManualMicStream() {
+  try { return await getAecMicStream(); }
+  catch (error) {
+    if (!error || error.code !== "AEC_UNAVAILABLE") throw error;
+    // Push-to-talk does not overlap assistant playback, so it can remain available on devices whose
+    // browser cannot provide AEC. This fallback is never used by continuous/barge-in mode.
+    return navigator.mediaDevices.getUserMedia({ audio: {
+      channelCount: { ideal: 1 }, noiseSuppression: { ideal: true },
+      autoGainControl: { ideal: true }, sampleRate: { ideal: PCM_SAMPLE_RATE }
+    } });
+  }
+}
+
+async function startNativeAecMicPipeline() {
+  if (!aecAudioCtx) throw new Error("Audio capture context is not initialized");
+  pcmPrerollFrames.length = 0; pcmPrerollSamples = 0; pcmCaptureActive = false; pcmCaptureFrames = [];
+  const rawMic = await getAecMicStream();
+  continuousStream = rawMic;
+  const track = rawMic.getAudioTracks()[0];
+  // The policy validates the setting before returning a stream; this is a defensive check for
+  // nonstandard MediaStream implementations and future refactors.
+  nativeAecSettings = track && track.getSettings ? track.getSettings() : nativeAecSettings || {};
+  const aecStatus = AudioCapturePolicy.inspectSettings(nativeAecSettings);
+  nativeAecMode = aecStatus.mode;
+  if (nativeAecMode === "disabled") {
+    rawMic.getTracks().forEach((t) => t.stop());
+    continuousStream = null;
+    throw new Error("The selected audio input did not enable echoCancellation");
+  }
+  if (nativeAecMode === "unknown") {
+    console.warn("AEC status cannot be verified on this input device", nativeAecSettings);
+    addNote("已啟動持續聆聽，但無法確認回音消除狀態；插話判斷會較保守。若 AI 聲音仍被聽見，請改用耳機。");
+  }
+
+  aecMicSource = aecAudioCtx.createMediaStreamSource(rawMic);
+  // AudioWorklet keeps capture off the UI/main thread, reducing glitches during LLM/UI work.
+  // It outputs silence into the audio graph (not mic monitoring) and transfers 10 ms PCM blocks.
+  try {
+    if (!aecWorkletModuleLoaded) {
+      await aecAudioCtx.audioWorklet.addModule("/static/aec-capture-worklet.js");
+      aecWorkletModuleLoaded = true;
+    }
+    aecMicProcessor = new AudioWorkletNode(aecAudioCtx, "aec-capture-worklet", {
+      numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: "explicit",
+      outputChannelCount: [1]
+    });
+    aecMicProcessor.port.onmessage = (event) => {
+      const samples = event.data && event.data.samples;
+      if (!(samples instanceof Float32Array) || !samples.length) return;
+      const frame = samples;
+      pcmPrerollFrames.push(frame.slice());
+      pcmPrerollSamples += frame.length;
+      const maxPrerollSamples = Math.round(PCM_SAMPLE_RATE * PCM_PREROLL_MS / 1000);
+      while (pcmPrerollSamples > maxPrerollSamples && pcmPrerollFrames.length > 1) {
+        pcmPrerollSamples -= pcmPrerollFrames.shift().length;
+      }
+      if (pcmCaptureActive) pcmCaptureFrames.push(frame.slice());
+      // VAD consumes the same 10 ms processed-capture frames as the recorder. This avoids a
+      // separate analyser + requestAnimationFrame loop and remains independent of display refresh.
+      if (vad && contBtn.classList.contains("on")) {
+        let sumSquares = 0;
+        for (let i = 0; i < frame.length; i++) sumSquares += frame[i] * frame[i];
+        const volume = Math.sqrt(sumSquares / frame.length);
+        if (!Number.isFinite(contStartedAtAudioMs)) contStartedAtAudioMs = event.data.atMs;
+        const speaking = sheIsSounding();
+        vad.handle({ type: "sample", volume, at: event.data.atMs - contStartedAtAudioMs, speaking });
+        if (vad.state === "speaking") {  // a clip is being recorded: remember how loud it got, and whether she was talking
+          clipPeak = Math.max(clipPeak, volume);
+          if (speaking) clipDuringSpeech = true;
+        }
+      }
+    };
+    aecMicProcessor.onprocessorerror = (event) => {
+      console.error("AudioWorklet capture processor failed", event);
+      if (contBtn.classList.contains("on")) {
+        stopContinuous();
+        addNote("音訊處理程序發生錯誤，已安全停止持續聆聽。請重新啟動；若重複發生，請更新應用程式。 ");
+      }
+    };
+    aecMicSource.connect(aecMicProcessor);
+    aecMicProcessor.connect(aecAudioCtx.destination);
+  } catch (workletError) {
+    // Continuous mode is latency-sensitive: do not silently downgrade to the deprecated
+    // main-thread ScriptProcessorNode. Stop capture cleanly and leave push-to-talk available.
+    try { if (aecMicProcessor) aecMicProcessor.disconnect(); } catch (_) {}
+    try { if (aecMicSource) aecMicSource.disconnect(); } catch (_) {}
+    rawMic.getTracks().forEach((t) => t.stop());
+    continuousStream = null; aecMicProcessor = null; aecMicSource = null;
+    console.error("AudioWorklet is required for continuous listening", workletError);
+    const error = new Error("AudioWorklet is unavailable; continuous mode requires a supported Chromium runtime");
+    error.code = "AUDIO_WORKLET_UNAVAILABLE";
+    throw error;
+  }
+  aecProcessedStream = rawMic;
+  return aecProcessedStream;
+}
+
+function syncMicGate(_state) {
+  // Intentionally do not disable the microphone: continuous listening must detect barge-in.
+}
+
+// ---- Hold to talk: press (button or F2) to record, release to send. Continuous listening off. ----
+let holdRecorder = null, holdChunks = [], holdStartedAt = 0, holding = false;
+
+async function startHolding() {
+  if (holding || !canRecord || contBtn.classList.contains("on")) return;
+  holding = true;
+  let stream;
+  try {
+    stream = await getManualMicStream();
+  } catch (err) {
+    holding = false;
+    addNote("麥克風沒有授權或無法使用:請確認 Windows 的麥克風隱私設定允許桌面應用程式、系統已選到輸入裝置,而且沒有被別的程式佔用。");
+    return;
+  }
+  abortCurrentSend();
+  stopAudio();
+  player.handle({ type: "listen_started" });
+  micBtn.classList.add("on");
+  holdChunks = [];
+  holdStartedAt = performance.now();
+  holdRecorder = new MediaRecorder(stream);
+  holdRecorder.ondataavailable = (e) => { if (e.data.size) holdChunks.push(e.data); };
+  holdRecorder.addEventListener("stop", () => {
+    stream.getTracks().forEach((t) => t.stop());
+    micBtn.classList.remove("on");
+    const durationMs = performance.now() - holdStartedAt;
+    const blob = new Blob(holdChunks, { type: holdRecorder.mimeType || "audio/webm" });
+    holdRecorder = null;
+    if (durationMs < vadConfig.vadMinMs) {
+      player.handle({ type: "listen_failed" });
+      addNote("聲音太短了,再按住說一次看看。");
+      return;
+    }
+    send(blob, { isAudio: true });
+  }, { once: true });
+  holdRecorder.start();
+}
+function stopHolding() {
+  holding = false;
+  if (holdRecorder && holdRecorder.state !== "inactive") holdRecorder.stop();
+}
+
+if (canRecord) {
+  micBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); startHolding(); });
+  for (const type of ["pointerup", "pointerleave", "pointercancel"]) micBtn.addEventListener(type, stopHolding);
+}
+
+// Encode captured float PCM at the actual AudioContext sample rate as a standard 16-bit WAV. This avoids MediaRecorder
+// start-up latency and lets each utterance include the pre-roll without invalid WebM fragments.
+function pcmFramesToWavBlob(frames, sampleRate = PCM_SAMPLE_RATE) {
+  const sampleCount = frames.reduce((n, frame) => n + frame.length, 0);
+  const bytes = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(bytes);
+  const writeText = (offset, value) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+  writeText(0, "RIFF"); view.setUint32(4, 36 + sampleCount * 2, true); writeText(8, "WAVE");
+  writeText(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); writeText(36, "data"); view.setUint32(40, sampleCount * 2, true);
+  let offset = 44;
+  for (const frame of frames) for (let i = 0; i < frame.length; i++) {
+    const sample = Math.max(-1, Math.min(1, frame[i]));
+    view.setInt16(offset, sample < 0 ? sample * 32768 : sample * 32767, true); offset += 2;
+  }
+  return new Blob([bytes], { type: "audio/wav" });
+}
+function beginPcmUtterance() {
+  pcmCaptureFrames = pcmPrerollFrames.map((frame) => frame.slice());
+  pcmCaptureActive = true;
+}
+function endPcmUtterance() {
+  pcmCaptureActive = false;
+  const frames = pcmCaptureFrames;
+  pcmCaptureFrames = [];
+  return pcmFramesToWavBlob(frames);
+}
+
+// ---- Continuous listening: mic stays open, VAD decides when a turn starts and ends. ----
+let continuousStream = null, audioCtx = null, vad = null;
+let contStartedAtAudioMs = null;
+let contWasInterrupt = false;
+// What the page measures about each clip, sent along (X-Clip-Meta) so that, with stt.debug_log on, the
+// server's log shows how loud a clip was and whether she was talking: the data for tuning ui.speaking_boost.
+let clipPeak = 0, clipDuringSpeech = false, clipStartedSpeaking = false;
+
+// "She is making sound right now" (her sentences or a thinking filler): her own voice can leak back into the mic.
+function sheIsSounding() {
+  return player.state.startsWith("talking:") || (!!fillerEl && !fillerEl.paused && !fillerEl.ended);
+}
+const speakingBoost = () => (vadConfig.ui && vadConfig.ui.speakingBoost) || 1;
+
+async function startContinuous({ auto = false } = {}) {
+  if (!canRecord || contBtn.classList.contains("on")) return;
+  try {
+    await ensureAudioCapturePipeline();
+    await startNativeAecMicPipeline();
+  } catch (err) {
+    if (continuousStream) continuousStream.getTracks().forEach((t) => t.stop());
+    continuousStream = null;
+    console.error("Native audio capture initialization failed", err);
+    if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
+      addNote(auto ? "設定了啟動時自動持續聆聽,但麥克風沒有授權,所以沒有開啟。允許麥克風後,可以到面板按「持續聆聽」。"
+                   : "麥克風沒有授權,無法開啟持續聆聽。");
+      return;
+    }
+    addNote("持續聆聽初始化失敗，尚未啟動。請確認麥克風可用、Windows 允許桌面應用程式使用麥克風，並且這支麥克風能啟用回音消除；也可以改用按住說話。");
+    return;
+  }
+  gate.handle({ type: "listening_started" });
+  contBtn.classList.add("on");
+  contBtn.textContent = "🎙️ 持續聆聽:開";
+  $("dotListen").hidden = false;
+  micBtn.disabled = true;
+
+  audioCtx = aecAudioCtx;
+  const activeTrack = continuousStream && continuousStream.getAudioTracks()[0];
+  if (activeTrack) {
+    activeTrack.addEventListener("ended", () => {
+      if (contBtn.classList.contains("on")) {
+        stopContinuous();
+        addNote("麥克風連線已中斷，持續聆聽已停止。請確認輸入裝置後重新開啟。 ");
+      }
+    }, { once: true });
+  }
+  // Unknown AEC state gets a higher gate and longer confirmation. Adaptive floor tracks only
+  // sub-gate room noise; AEC remains the primary echo defence, not VAD.
+  const vadThreshold = nativeAecMode === "active" ? 0.02 : 0.035;
+  vad = new VoiceActivityDetector({
+    threshold: vadThreshold, releaseThreshold: vadThreshold * 0.72,
+    attackMs: 30, silenceMs: vadConfig.vadSilenceMs, minMs: vadConfig.vadMinMs,
+    maxMs: 20000, adaptive: true, noiseMultiplier: 3.0, speakingBoost: speakingBoost(),
+    noiseFloor: vadThreshold * 0.2, noiseAlpha: 0.025, maxThresholdMultiplier: 2.2,
+    onChange: handleVad
+  });
+  contStartedAtAudioMs = null;
+}
+
+function stopContinuous() {
+  contBtn.classList.remove("on");
+  contBtn.textContent = "🎙️ 持續聆聽:關";
+  $("dotListen").hidden = true;
+  micBtn.disabled = false;
+  vad = null;
+  performActions(gate.handle({ type: "listening_stopped" }));
+  pcmCaptureActive = false;
+  pcmCaptureFrames = [];
+  pcmPrerollFrames.length = 0;
+  pcmPrerollSamples = 0;
+  if (aecMicProcessor) {
+    if (aecMicProcessor.port) aecMicProcessor.port.onmessage = null;
+    aecMicProcessor.onaudioprocess = null;
+    try { aecMicProcessor.disconnect(); } catch (_) {}
+  }
+  if (aecMicSource) { try { aecMicSource.disconnect(); } catch (_) {} }
+  if (continuousStream) continuousStream.getTracks().forEach((t) => t.stop());
+  nativeAecSettings = null;
+  nativeAecMode = "unknown";
+  aecMicSource = null; aecMicProcessor = null; aecProcessedStream = null;
+  audioCtx = null;
+}
+
+function isAssistantOutputActive() {
+  return (current && !current.paused && !current.ended) || queue.length > 0 ||
+    (fillerEl && !fillerEl.paused && !fillerEl.ended) ||
+    player.state.startsWith("talking:") || player.state === "thinking";
+}
+
+function handleVad(event) {
+  if (event.type === "started") {
+    contWasInterrupt = isAssistantOutputActive();
+    clipPeak = 0; clipStartedSpeaking = clipDuringSpeech = sheIsSounding();
+    beginPcmUtterance();   // starts from the 400 ms pre-roll, so the first syllable is not lost
+    // If she is talking or thinking this is only a CANDIDATE interruption: she is turned down, not stopped.
+    performActions(gate.handle({ type: "voice_started", assistantActive: contWasInterrupt }));
+    return;
+  }
+  if (event.type === "too_short") {
+    pcmCaptureActive = false;
+    pcmCaptureFrames = [];
+    performActions(gate.handle({ type: "voice_too_short" }));
+    return;
+  }
+  if ((event.type === "finished" || event.type === "max_duration") && pcmCaptureActive) {
+    const durationMs = event.durationMs;
+    const meta = `peak=${clipPeak.toFixed(3)};during_speech=${clipDuringSpeech ? 1 : 0};started_speaking=${clipStartedSpeaking ? 1 : 0};boost=${speakingBoost()};duck=${duckTarget()}`;
+    const blob = endPcmUtterance();
+    const [verdict] = gate.handle({ type: "voice_finished" });
+    if (!verdict.probation) {
+      abortCurrentSend(); // an ordinary turn (she was silent): nothing to protect, start listening
+      stopAudio();
+      player.handle({ type: "listen_started" });
+    }
+    // A candidate is sent on probation: she keeps talking (turned down) until the server says whether
+    // it was real words. Only then (send -> beginTurn) is she cut off.
+    send(blob, { isAudio: true, wasInterrupt: verdict.wasInterrupt, probation: verdict.probation ? { token: verdict.token } : null, voiceMode: "continuous", voiceDurationMs: durationMs, meta });
+  }
+}
+
+contBtn.addEventListener("click", () => {
+  if (contBtn.classList.contains("on")) stopContinuous(); else startContinuous();
+});
+
+// Recover the Web Audio clock after OS/device sleep. Never pretend capture is healthy if the
+// selected microphone disappears; a new device selection requires a clean restart.
+document.addEventListener("visibilitychange", async () => {
+  if (!document.hidden && contBtn.classList.contains("on") && aecAudioCtx && aecAudioCtx.state === "suspended") {
+    try { await aecAudioCtx.resume(); }
+    catch (err) { console.warn("Could not resume audio context", err); }
+  }
+});
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", async () => {
+    if (!contBtn.classList.contains("on") || !continuousStream) return;
+    const track = continuousStream.getAudioTracks()[0];
+    let missing = !track || track.readyState !== "live";
+    const deviceId = track && track.getSettings ? track.getSettings().deviceId : "";
+    if (!missing && deviceId && navigator.mediaDevices.enumerateDevices) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        missing = !devices.some((d) => d.kind === "audioinput" && d.deviceId === deviceId);
+      } catch (_) { /* Permission/privacy-restricted enumeration is not proof of device loss. */ }
+    }
+    if (missing && contBtn.classList.contains("on")) {
+      stopContinuous();
+      addNote("音訊裝置已變更或中斷，持續聆聽已安全停止。請確認輸入裝置後重新啟動。 ");
+    }
+  });
+}
+
+// ---- F2: hold-to-talk when continuous listening is off; an immediate, manual "stop talking
+//      now" override when it's on (the automatic detection is not the only way to interrupt). ----
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "F2" || e.repeat || listeningOff) return;
+  e.preventDefault();
+  if (contBtn.classList.contains("on")) {
+    abortCurrentSend();
+    stopAudio();
+    player.handle({ type: "listen_started" });
+  } else {
+    startHolding();
+  }
+});
+document.addEventListener("keyup", (e) => { if (e.key === "F2") stopHolding(); });
+
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const message = input.value.trim();
+  if (!message && !pendingImage) return;
+  input.value = "";
+  growInput();
+  const image = pendingImage;
+  clearPendingImage();
+  send(message, { image });
+});
+</script>
+</body>
+</html>

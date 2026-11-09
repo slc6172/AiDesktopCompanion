@@ -1,0 +1,17 @@
+{
+  "name": "ai-companion-electron",
+  "version": "1.0.0",
+  "private": true,
+  "description": "無邊框、透明、可拖曳的桌寵外殼。由 companion/launcher.py 啟動,不是獨立執行的 app。",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "install-electron"
+  },
+  "devDependencies": {
+    "electron": "45.2.2"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

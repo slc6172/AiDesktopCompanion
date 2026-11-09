@@ -1,0 +1,43 @@
+# --- 使用者自己的檔案(不要入庫:金鑰、私人對話、人設)---
+config.json
+persona.md
+data/
+
+# --- 虛擬環境與相依套件 ---
+.venv/
+venv/
+node_modules/
+
+# --- 角色動畫:內容不入庫,只保留說明檔 ---
+clips/*
+!clips/README*
+
+# --- 思考短音:音檔不入庫,只保留說明檔 ---
+fillers/*
+!fillers/README*
+
+# --- 快取與暫存 ---
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+
+# --- 機密與本機資料(保險起見)---
+.env
+.env.*
+*.pem
+*.key
+*.db
+*.sqlite
+*.sqlite3
+
+# --- 手動 smoke 與分析工具的輸出 ---
+hello.mp3
+smoke-*.png
+*.csv
+
+# --- 打包與作業系統雜物 ---
+dist/
+build/
+.DS_Store
+Thumbs.db

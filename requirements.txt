@@ -1,0 +1,9 @@
+google-genai
+groq
+httpx
+fastapi
+uvicorn
+edge-tts
+keyring
+tzdata
+Pillow

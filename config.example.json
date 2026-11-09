@@ -1,0 +1,156 @@
+{
+  "tts": {
+    "enabled": true,
+    "engine": "auto",
+    "fallback": true,
+    "edge": {
+      "voice": "zh-TW-HsiaoChenNeural",
+      "rate": "+0%",
+      "volume": "+0%",
+      "pitch": "+0Hz"
+    },
+    "openai": {
+      "url": null,
+      "model": "primetts",
+      "voice": "default",
+      "format": "wav",
+      "api_key": null,
+      "timeout_s": 15
+    },
+    "fish": {
+      "model": "s2.1-pro-free",
+      "reference_id": null,
+      "format": "mp3",
+      "timeout_s": 20,
+      "emotion_tags": {
+        "neutral": "",
+        "happy": "[happy]",
+        "sad": "[sad]",
+        "angry": "[angry]",
+        "surprised": "[surprised]"
+      }
+    }
+  },
+  "proactive": {
+    "enabled": false,
+    "min_minutes": 10,
+    "max_minutes": 30
+  },
+  "ui": {
+    "auto_listen": false,
+    "on_top_level": "normal",
+    "hit_width_ratio": 0.6,
+    "speaking_boost": 1.0,
+    "duck_level": 0.4
+  },
+  "time": {
+    "enabled": true,
+    "timezone": null,
+    "gap_marker_minutes": 30,
+    "routine": [
+      {
+        "name": "早餐",
+        "start": "07:00",
+        "end": "09:00",
+        "hint": "這個時間通常會吃早餐,可以自然地帶到(像是問他吃了沒),不必每次都提。"
+      },
+      {
+        "name": "午餐",
+        "start": "12:00",
+        "end": "13:30",
+        "hint": "這個時間通常會吃午餐,可以自然地帶到(像是問他吃了沒),不必每次都提。"
+      },
+      {
+        "name": "晚餐",
+        "start": "18:00",
+        "end": "19:30",
+        "hint": "這個時間通常會吃晚餐,可以自然地帶到(像是問他吃了沒),不必每次都提。"
+      },
+      {
+        "name": "深夜",
+        "start": "23:00",
+        "end": "07:00",
+        "hint": "現在是睡覺的時間。你自己維持醒著、不要裝睡,但發現太晚時可以自然地關心他怎麼還沒睡,語氣放輕一點。"
+      }
+    ],
+    "quiet_hours": {
+      "enabled": true,
+      "start": "00:00",
+      "end": "07:00"
+    }
+  },
+  "stt": {
+    "enabled": true,
+    "language": null,
+    "filter": true,
+    "allowed_languages": [
+      "zh",
+      "en",
+      "ja"
+    ],
+    "ignore_phrases": [
+      "thank you",
+      "thanks",
+      "okay",
+      "yes",
+      "music",
+      "and the",
+      "you",
+      "bye"
+    ],
+    "prompt": null,
+    "no_speech_prob_max": 0.6,
+    "avg_logprob_min": -1.0,
+    "debug_log": false
+  },
+  "outfit": {
+    "default": "日常",
+    "aliases": {
+      "睡衣": [
+        "睡袍",
+        "pajamas"
+      ]
+    }
+  },
+  "image": {
+    "enabled": false,
+    "model": "flux-2-klein-9b",
+    "account_id": null,
+    "width": 576,
+    "height": 1024,
+    "max_per_day": 6,
+    "cooldown_s": 30,
+    "timeout_s": 120,
+    "appearance": ""
+  },
+  "tinyfish": {
+    "enabled": false,
+    "location": "TW",
+    "language": "zh",
+    "max_results": 5,
+    "quarantine": true,
+    "blocked_domains": []
+  },
+  "memory": {
+    "enabled": true,
+    "long_term_max_chars": 2000,
+    "recent_notes_max_chars": 600,
+    "retrieval_k": 3,
+    "retrieval_snippet_chars": 200,
+    "retrieval_min_message_chars": 3,
+    "retrieval_min_score": 0.6,
+    "archive_scan_limit": 20000
+  },
+  "companion_state": {
+    "enabled": true,
+    "default_location": "家裡",
+    "status_ttl_hours": {
+      "微醺": 3,
+      "酒醉": 8,
+      "疲倦": 10,
+      "感冒": 72
+    },
+    "default_status_ttl_hours": 12,
+    "max_items": 20
+  }
+}

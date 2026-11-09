@@ -1,0 +1,21 @@
+# Dependabot 版本更新。
+# - Python:requirements.txt 目前沒有固定版本,Dependabot 能提供的資訊有限;固定版本後才會有更新建議。
+# - Electron:釘在確切版本。Dependabot 開的 Electron PR 會讓 tests/test_electron_pin.py 失敗,這是刻意的:
+#   升版要連同文件與雜湊一起改,步驟見 CONTRIBUTING.md「Electron 升版政策」。
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: "npm"
+    directory: "/electron"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 3
