@@ -9,7 +9,7 @@
     "postinstall": "install-electron"
   },
   "devDependencies": {
-    "electron": "45.2.2"
+    "electron": "45.2.3"
   },
   "engines": {
     "node": ">=22.12.0"
