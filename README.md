@@ -7,11 +7,11 @@
 > **僅支援 Windows 10 / 11。** 目前不支援 macOS 與 Linux。介面與角色語言為繁體中文。
 
 <!-- 截圖 1:桌寵視窗(角色全身 + 右下角的 ⚙ 工具列)。把圖放到 docs/images/screenshot-pet.png,再取消下一行的註解:
-![桌寵視窗](docs/images/screenshot-pet.png)
+[換裝系統](docs/images/screenshot-pet.png)
 -->
 
 <!-- 截圖 2(選填):展開的對話面板與語音按鈕。把圖放到 docs/images/screenshot-chat.png,再取消下一行的註解:
-![對話面板](docs/images/screenshot-chat.png)
+[對話面板](docs/images/screenshot-chat.png)
 -->
 
 ## 特色
